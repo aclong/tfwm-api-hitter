@@ -1,3 +1,6 @@
+#!/opt/anaconda/bin/python
+
+
 #load in libraries
 from dotenv import load_dotenv
 import requests
@@ -7,6 +10,7 @@ import urllib
 import pandas as pd
 import numpy as np
 import psycopg2
+from io import StringIO
 import datetime as dt
 
 #get the env variables
@@ -44,15 +48,7 @@ def copy_from_stringio(conn, df, table):
     Here we are going save the dataframe in memory 
     and use copy_from() to copy it to the table
     """
-    #convert the datetimes to string and include NULL to help writing
-    #.dt.strftime('%Y-%m-%d %H:%M:%S').replace('NaT', 'NULL')
-    df.start_date_time=df.start_date_time.dt.strftime('%Y-%m-%d %H:%M:%S').replace('NaT', 'NULL')
-    df.start_date_time=df.start_date_time.replace(np.nan, '-infinity')
-    df.capture_date_time=df.capture_date_time.dt.strftime('%Y-%m-%d %H:%M:%S').replace('NaT', 'NULL')
-    df.capture_date_time=df.capture_date_time.replace(np.nan, '-infinity')
-    df.request_datetime=df.request_datetime.dt.strftime('%Y-%m-%d %H:%M:%S').replace('NaT', 'NULL')
-    df.request_datetime=df.request_datetime.replace(np.nan, '-infinity')
-    #convert this to write all dates type columns into strings before writing to psql
+    
     
     # save dataframe to an in memory buffer
     buffer = StringIO()
@@ -97,7 +93,9 @@ if response.status_code==200:
     date_string=response.headers['Date']
 
     req_date_time=dt.datetime.strptime(date_string, '%a, %d %b %Y %H:%M:%S %Z')
-
+    
+    time_zone_string=dt.datetime.now(dt.timezone.utc).astimezone().tzname()
+    
     #parse response content
     feed.ParseFromString(response.content)
     
@@ -114,7 +112,7 @@ if response.status_code==200:
                       "route_id": feed.entity[i].vehicle.trip.route_id,
                       "trip_id": feed.entity[i].vehicle.trip.trip_id,
                       "schedule_relationship": feed.entity[i].vehicle.trip.schedule_relationship,
-                      "start_date_time": f'{feed.entity[i].vehicle.trip.start_date}_{feed.entity[i].vehicle.trip.start_time}',
+                      "start_date_time": f'{feed.entity[i].vehicle.trip.start_date}T{feed.entity[i].vehicle.trip.start_time}{time_zone_string}',
                       "latitude": feed.entity[i].vehicle.position.latitude,
                       "longitude": feed.entity[i].vehicle.position.longitude,
                       "current_stop_seq": feed.entity[i].vehicle.current_stop_sequence,
@@ -128,12 +126,23 @@ if response.status_code==200:
         #convert rows list to dataframe
         df = pd.DataFrame(rows_list, columns=row_dict.keys()) 
         
-        #convert all the datatypes - running this in the pd 
+        #convert all the date times datetime objects then to strings and add timezone info - running this in the pd 
         #vectorises all the messy conditionals that would be needed if doing at the dicitonary creation phases
         #by using panda methods
-        df.start_date_time=pd.to_datetime(df.start_date_time, format='%Y%m%d_%H:%M:%S', errors='coerce')
+        df.start_date_time=pd.to_datetime(df.start_date_time, format='%Y%m%dT%H:%M:%S%Z', errors='coerce')
         
-        df.capture_date_time=pd.to_datetime(df.capture_date_time)
+        df.capture_date_time=pd.to_datetime(df.capture_date_time, unit='s', origin='unix')
+        
+        #convert the datetimes to string and include NULL to help writing
+        #.dt.strftime('%Y-%m-%d %H:%M:%S').replace('NaT', 'NULL')
+        df.start_date_time=df.start_date_time.dt.strftime('%Y-%m-%dT%H:%M:%S')#.replace('NaT', 'NULL')
+        df.start_date_time=df.start_date_time.replace(np.nan, '-infinity')
+        
+        df.capture_date_time=df.capture_date_time.dt.strftime('%Y-%m-%dT%H:%M:%S')#.replace('NaT', 'NULL')
+        df.capture_date_time=df.capture_date_time.replace(np.nan, '-infinity')
+        
+        df.request_datetime=df.request_datetime.dt.strftime('%Y-%m-%dT%H:%M:%S')#.replace('NaT', 'NULL')
+        df.request_datetime=df.request_datetime.replace(np.nan, '-infinity')
     
         #now append to the database table
         
